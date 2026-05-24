@@ -1,0 +1,221 @@
+# 3D Aircraft Flight Performance Analyzer
+
+This project is a high-fidelity Python-based aircraft performance simulator designed to model finite-wing 3D aerodynamics using realistic aerospace engineering equations. Unlike simple 2D airfoil calculators, this simulator applies finite-wing corrections, induced drag modeling, compressibility effects, Reynolds number effects, and stall behavior to better represent real aircraft flight conditions.
+
+The simulator supports both:
+
+* Direct aerodynamic coefficient input mode
+* Physics-based NACA 4-digit airfoil simulation mode
+
+The program analyzes aircraft aerodynamic behavior under varying flight conditions and generates a detailed engineering-style flight performance report.
+
+---
+
+# Core Features
+
+* Finite-wing 3D aerodynamic modeling
+* Aspect ratio based lift correction
+* Induced drag calculations
+* Reynolds number corrections
+* Mach number and compressibility effects
+* Wave drag estimation
+* Stall modeling and stall drag estimation
+* Lift, drag, thrust, and power calculations
+* Flight state analysis:
+
+  * Climbing
+  * Stable flight
+  * Descending
+  * Stall warning
+* NACA 4-digit airfoil support
+* Engineering-style aerodynamic report generation
+
+---
+
+# Major Aerodynamic Equations Used
+
+## Wing Reference Area
+
+S = b * c
+
+where:
+
+* b = wingspan
+* c = mean aerodynamic chord
+
+---
+
+## Aspect Ratio
+
+AR = b² / S
+
+Aspect ratio is a key parameter controlling induced drag and aerodynamic efficiency.
+
+---
+
+## Dynamic Pressure
+
+q = 0.5 * rho * V²
+
+This represents the kinetic energy density of airflow.
+
+---
+
+## Reynolds Number
+
+Re = (rho * V * c) / mu
+
+Used to estimate turbulent boundary-layer effects and profile drag.
+
+---
+
+## Mach Number
+
+M = V / a
+
+Used for compressibility and wave-drag calculations.
+
+---
+
+## 2D Lift Coefficient
+
+CL = CL_alpha * (alpha - alpha0)
+
+Used in NACA-based aerodynamic solving.
+
+---
+
+## Finite-Wing 3D Lift Correction
+
+CL_3D = CL_2D / (1 + (CL_2D / (pi * e * AR)))
+
+Corrects 2D airfoil lift predictions for realistic 3D finite-wing behavior.
+
+---
+
+## Induced Drag
+
+CDi = CL² / (pi * e * AR)
+
+Models drag caused by wingtip vortices and lift generation.
+
+---
+
+## Total Drag Coefficient
+
+CD = CD0 + CDi + CD_wave + CD_stall
+
+Combines:
+
+* parasite drag
+* induced drag
+* compressibility wave drag
+* stall drag
+
+---
+
+## Lift Force
+
+L = q * S * CL
+
+---
+
+## Drag Force
+
+D = q * S * CD
+
+---
+
+## Power Required
+
+P = D * V
+
+Used to estimate engine power needed to maintain flight speed.
+
+---
+
+# Aerodynamic Modeling Logic
+
+The simulator first computes the aircraft geometric properties such as wing area and aspect ratio. It then calculates flow properties including Reynolds number, Mach number, and dynamic pressure.
+
+In NACA simulation mode, the program derives aerodynamic coefficients directly from airfoil geometry and angle of attack using thin-airfoil theory and aerodynamic correction models.
+
+The solver then applies:
+
+* finite-wing corrections
+* induced drag models
+* compressibility corrections
+* wave drag estimation
+* stall behavior modeling
+
+Finally, aerodynamic forces and aircraft performance metrics are computed to determine overall flight state and aircraft behavior.
+
+---
+
+# Flight State Analysis
+
+The simulator determines aircraft operating condition based on aerodynamic force balance:
+
+* Stable Flight
+* Climbing
+* Descending
+* Stall Warning
+* Full Stall Condition
+
+This is achieved using net vertical force calculations and stall-angle detection.
+
+---
+
+# Technical Concepts Implemented
+
+* Finite Wing Aerodynamics
+* Thin Airfoil Theory
+* Prandtl-Glauert Compressibility Correction
+* Boundary Layer Skin Friction
+* Reynolds Number Effects
+* Wave Drag Approximation
+* Stall Modeling
+* Aerodynamic Force Balance
+* Aircraft Performance Analysis
+
+---
+
+# Input Parameters
+
+The simulator supports:
+
+* Air density
+* Velocity
+* Wingspan
+* Mean aerodynamic chord
+* Aircraft weight
+* Oswald efficiency factor
+* NACA 4-digit profile
+* Angle of attack
+* User-defined lift and drag coefficients
+
+
+
+# Output Parameters
+
+The generated report includes:
+
+* Wing geometry
+* Flow-field conditions
+* Aerodynamic coefficients
+* Drag decomposition
+* Lift and drag forces
+* Power required
+* Thrust-to-weight ratio
+* Lift-to-drag ratio
+* Flight condition analysis
+* Stall warnings
+
+
+# Technologies Used
+
+* Python 3
+* NumPy
+* Python math module
+* Object-Oriented Programming (OOP)
+
