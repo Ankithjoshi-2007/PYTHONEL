@@ -1,17 +1,4 @@
-"""
-Airfoil Aerodynamics Simulation
-================================
-2D airfoil simulation with:
-  - NACA profile geometry
-  - CL/CD vs AoA graph
-  - Pressure coefficient distribution
-  - CL-CD Polar diagram
-  - Animated flow field with streamlines
 
-Dependencies: numpy, matplotlib, scipy
-Install:  pip install numpy matplotlib scipy
-Run:      python airfoil_simulation.py
-"""
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -266,6 +253,41 @@ def compute_flow_field(aero: AirfoilAero, Nx=60, Ny=40):
     return X, Y, U, V, speed
 
 
+def evaluate_velocity_at(aero: AirfoilAero, px, py):
+    """Analytically computes 2D velocity (u, v) at coordinates px, py."""
+    alpha = np.radians(aero.alpha)
+    V_inf = max(aero.wind, 1.0)
+    cl = aero.cl()
+
+    u = V_inf * np.cos(alpha) * np.ones_like(px)
+    v = V_inf * np.sin(alpha) * np.ones_like(py)
+
+    mu = 0.045 * (1 + 4 * aero.t)
+    Gamma = 0.5 * V_inf * cl * 1.0
+
+    panels = [
+        (0.25, 0.00, mu * 1.2),
+        (0.50, 0.00, mu * 0.9),
+        (0.10, 0.00, mu * 0.7),
+        (0.75, 0.00, mu * 0.5),
+    ]
+    for (xp, yp, strength) in panels:
+        dx = px - xp; dy = py - yp
+        r2 = dx**2 + dy**2 + 1e-6
+        u += -strength * (dx**2 - dy**2) / r2**2
+        v += -strength * 2 * dx * dy      / r2**2
+
+    # Vortex at quarter chord
+    dx = px - 0.25; dy = py - 0.0
+    r2 = dx**2 + dy**2 + 1e-6
+    u += -Gamma / (2*np.pi) * (-dy / r2)
+    v += -Gamma / (2*np.pi) * ( dx / r2)
+
+    pg = aero.pg_factor
+    u *= pg; v *= pg
+    return u, v
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  MAIN APPLICATION
 # ─────────────────────────────────────────────────────────────────────────────
@@ -274,8 +296,8 @@ class AirfoilSimApp:
 
     NACA_OPTIONS = ["0009", "0012", "2412", "4412", "6412", "2415", "4415"]
 
-    def __init__(self):
-        self.aero = AirfoilAero()
+    def __init__(self, naca="2412", alpha=5.0, Re=3e6, mach=0.15, wind=50.0):
+        self.aero = AirfoilAero(naca=naca, alpha=alpha, Re=Re, mach=mach, wind=wind)
         self._build_ui()
         self._init_animation()
         self._update_all()
@@ -355,9 +377,10 @@ class AirfoilSimApp:
                  color=LABEL_COLOR, fontsize=8, fontweight="bold", va="top")
         radio_ax = fig.add_axes([0.012, 0.81, 0.19, 0.10])
         radio_ax.set_facecolor("#0f1117")
+        active_idx = self.NACA_OPTIONS.index(self.aero.naca) if self.aero.naca in self.NACA_OPTIONS else 2
         self.naca_radio = RadioButtons(
             radio_ax, self.NACA_OPTIONS,
-            active=self.NACA_OPTIONS.index("2412"),
+            active=active_idx,
             activecolor="#3b82f6")
         for lbl in self.naca_radio.labels:
             lbl.set_color(LABEL_COLOR)
@@ -366,11 +389,11 @@ class AirfoilSimApp:
 
         # ── Parameter Sliders ────────────────────────────────────────────────
         slider_specs = [
-            ("α  Angle of Attack (°)",    "aoa",    -15, 25,  5.0,   0.5),
-            ("Re  Reynolds Number (M)",   "re",      0.5, 10, 3.0,  0.1),
-            ("Ma  Mach Number",           "mach",   0.01, 0.85, 0.15, 0.01),
-            ("V∞  Wind Speed (m/s)",      "wind",     5, 340, 50.0,  1.0),
-            ("μ  Viscosity (×10⁻⁵ Pa·s)", "visc",  1.00, 3.00, 1.81, 0.01),
+            ("α  Angle of Attack (°)",    "aoa",    -15, 25,  self.aero.alpha,   0.5),
+            ("Re  Reynolds Number (M)",   "re",      0.5, 10, self.aero.Re / 1e6,  0.1),
+            ("Ma  Mach Number",           "mach",   0.01, 0.85, self.aero.mach, 0.01),
+            ("V∞  Wind Speed (m/s)",      "wind",     5, 340, self.aero.wind,  1.0),
+            ("μ  Viscosity (×10⁻⁵ Pa·s)", "visc",  1.00, 3.00, self.aero.viscosity * 1e5, 0.01),
         ]
 
         self.sliders = {}
@@ -598,10 +621,58 @@ class AirfoilSimApp:
     # ─────────────────────────────────────────────────────────────────────────
 
     def _init_animation(self):
-        """Set up static elements for the flow animation panel."""
+        """Set up particle animation loop."""
         self.anim_running = True
-        self._anim_obj    = None
-        self._stream_seed  = None
+        self.num_particles = 150
+        # Initialize particles randomly across the flow field
+        self.particles_x = np.random.uniform(-0.6, 1.8, self.num_particles)
+        self.particles_y = np.random.uniform(-0.7, 0.7, self.num_particles)
+        
+        # Plot particles as scatter points
+        self.particle_dots, = self.ax_flow.plot(self.particles_x, self.particles_y, 'o', color='#60a5fa', markersize=2, alpha=0.6, zorder=4)
+        
+        # Start FuncAnimation
+        self.anim = animation.FuncAnimation(
+            self.fig, self._animate_step, interval=30, blit=True, cache_frame_data=False
+        )
+
+    def _animate_step(self, frame):
+        if not self.anim_running:
+            return (self.particle_dots,)
+            
+        # Get velocity at current positions
+        u, v = evaluate_velocity_at(self.aero, self.particles_x, self.particles_y)
+        
+        # Scale time step inversely with wind speed to keep particle movement visually consistent
+        dt = 0.0005 * (100.0 / max(self.aero.wind, 5.0))
+        self.particles_x += u * dt
+        self.particles_y += v * dt
+        
+        # Re-seed particles that go out of bounds
+        out_of_bounds = (self.particles_x > 1.8) | (self.particles_x < -0.6) | (self.particles_y > 0.7) | (self.particles_y < -0.7)
+        
+        # Re-seed if they get too close/inside the airfoil
+        in_foil = np.zeros_like(self.particles_x, dtype=bool)
+        idx = (self.particles_x >= 0.0) & (self.particles_x <= 1.0)
+        if np.any(idx):
+            px = self.particles_x[idx]
+            py = self.particles_y[idx]
+            t = self.aero.t
+            m = self.aero.m
+            p = self.aero.p
+            yt = (t / 0.2) * (0.2969 * np.sqrt(px) - 0.1260 * px - 0.3516 * px**2 + 0.2843 * px**3 - 0.1015 * px**4)
+            yc = np.where(px <= p,
+                          m / (p**2 + 1e-6) * (2*p*px - px**2),
+                          m / ((1-p)**2 + 1e-6) * ((1 - 2*p) + 2*p*px - px**2))
+            in_foil[idx] = np.abs(py - yc) < (yt + 0.02)
+            
+        reset_indices = out_of_bounds | in_foil
+        if np.any(reset_indices):
+            self.particles_x[reset_indices] = -0.6
+            self.particles_y[reset_indices] = np.random.uniform(-0.7, 0.7, np.sum(reset_indices))
+            
+        self.particle_dots.set_data(self.particles_x, self.particles_y)
+        return (self.particle_dots,)
 
     def _draw_flow_static(self):
         """Draw the airfoil body and flow field (called once per param change)."""
@@ -682,6 +753,10 @@ class AirfoilSimApp:
                      color="#e2e8f0", fontsize=9, pad=5, fontweight="bold")
         ax.text(0.5, -0.62, info, transform=ax.transData,
                 color="#64748b", fontsize=6.5, ha="center")
+
+        # Re-attach particle dots to the cleared axis
+        if hasattr(self, 'particles_x'):
+            self.particle_dots, = ax.plot(self.particles_x, self.particles_y, 'o', color='#60a5fa', markersize=2, alpha=0.6, zorder=4)
 
     # ─────────────────────────────────────────────────────────────────────────
     #  METRICS DISPLAY

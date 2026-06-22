@@ -1,40 +1,5 @@
-#!/usr/bin/env python3
-"""
-High-Fidelity 3D Finite-Wing Flight Performance Analyzer & Aerodynamic Simulator
-------------------------------------------------------------------------------
-An advanced, object-oriented flight mechanics tool to simulate 3D finite-wing 
-aircraft performance, integrating the aerodynamic formulations from 
-'airfoil_simulation (1).py' with 3D finite-wing corrections.
 
-Mathematical Models & Formulas:
-1. Geometric Parameters:
-   - Reference Wing Area (S) = b * c
-   - Aspect Ratio (AR) = b^2 / S = b / c
-2. Aerodynamic Corrections (from airfoil_simulation (1).py):
-   - Speed of sound (a) = 340.0 m/s (ISA Sea Level)
-   - Mach Number (M) = V / a
-   - Dynamic Pressure (q) = 0.5 * rho * V^2
-   - Reynolds Number (Re) = (rho * V * c) / mu   (mu = 1.81e-5 Pa*s)
-   - Prandtl-Glauert factor (pg) = 1.0 / sqrt(1 - M^2)
-   - Zero-Lift Angle (alpha_0) = -m * (1 - 2*p) * pi (converted to degrees)
-   - Lift Curve Slope (cl_slope) = 2 * pi * (1 + 0.77 * t)
-   - Skin Friction Coefficient (cf) = 0.074 / Re^0.2
-   - Zero-Lift Drag Coeff (Cd0) = 2 * cf * (1 + 2.7*t + 100*t^4)
-3. 3D Corrections & Drag Decomposition:
-   - Corrected 3D Lift Coeff: CL_3D = CL_2D / (1 + (CL_2D / (pi * e * AR)))
-   - Induced Drag Coeff (Cdi) = CL_3D^2 / (pi * e * AR)
-   - Wave Drag (Cd_wave) = 20 * max(0, M - 0.72)^3 if M > 0.72 else 0
-   - Stall Pressure Drag (Cd_stall) = 0.1 * max(0, abs(alpha_rad) - stall_rad)^2
-   - Total Drag Coeff (CD) = CD0 + Cdi + Cd_wave + Cd_stall
-4. Force & Propulsion Balance:
-   - Lift Force (L) = q * S * CL_3D
-   - Drag Force (D) = q * S * CD
-   - Required Thrust (T) = D
-   - Power Required (P) = D * V
 
-Author: Antigravity AI Aerospace Suite
-Date: May 2026
-"""
 
 import math
 import sys
