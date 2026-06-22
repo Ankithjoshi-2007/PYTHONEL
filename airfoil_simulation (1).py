@@ -204,12 +204,16 @@ class AirfoilAero:
 def compute_flow_field(aero: AirfoilAero, Nx=60, Ny=40):
     """
     Build a 2D velocity field around the airfoil using superposition of:
-      - Uniform freestream (at angle alpha)
-      - Doublet (simulates airfoil body)
+      - Uniform freestream (always horizontal – wind direction never changes)
+      - Doublet (simulates airfoil body, panels placed at rotated chord positions)
       - Vortex (simulates circulation / lift)
     Returns X, Y, U, V grids and speed magnitude.
+
+    NOTE: The freestream is always horizontal (left-to-right).  Alpha only
+    determines how much the airfoil is rotated relative to the flow, not the
+    flow direction itself.
     """
-    alpha = np.radians(aero.alpha)
+    alpha_rad = np.radians(aero.alpha)
     V_inf = max(aero.wind, 1.0)
     cl = aero.cl()
 
@@ -217,30 +221,40 @@ def compute_flow_field(aero: AirfoilAero, Nx=60, Ny=40):
     y = np.linspace(-0.7, 0.7, Ny)
     X, Y = np.meshgrid(x, y)
 
-    # Freestream
-    U = V_inf * np.cos(alpha) * np.ones_like(X)
-    V = V_inf * np.sin(alpha) * np.ones_like(X)
+    # Freestream — ALWAYS horizontal, direction never changes
+    U = V_inf * np.ones_like(X)
+    V = np.zeros_like(X)
 
     # Doublet strength proportional to chord + thickness
     mu = 0.045 * (1 + 4 * aero.t)
     # Vortex strength from Kutta-Joukowski: Gamma = 0.5 * V_inf * cl * chord
     Gamma = 0.5 * V_inf * cl * 1.0
 
-    # Multiple source panels to approximate body
-    panels = [
+    # Rotate panel centres with the airfoil (pivot = quarter chord at x=0.25)
+    cos_a = np.cos(-alpha_rad); sin_a = np.sin(-alpha_rad)
+    pivot = 0.25
+    def rot_pt(xp, yp):
+        xr = pivot + (xp - pivot) * cos_a - yp * sin_a
+        yr =         (xp - pivot) * sin_a + yp * cos_a
+        return xr, yr
+
+    # Multiple source panels to approximate body (positions rotated with wing)
+    raw_panels = [
         (0.25, 0.00, mu * 1.2),
         (0.50, 0.00, mu * 0.9),
         (0.10, 0.00, mu * 0.7),
         (0.75, 0.00, mu * 0.5),
     ]
-    for (xp, yp, strength) in panels:
-        dx = X - xp; dy = Y - yp
+    for (xp, yp, strength) in raw_panels:
+        rxp, ryp = rot_pt(xp, yp)
+        dx = X - rxp; dy = Y - ryp
         r2 = dx**2 + dy**2 + 1e-6
         U += -strength * (dx**2 - dy**2) / r2**2
         V += -strength * 2 * dx * dy      / r2**2
 
-    # Vortex at quarter chord
-    dx = X - 0.25; dy = Y - 0.0
+    # Vortex at rotated quarter chord
+    vxp, vyp = rot_pt(0.25, 0.0)
+    dx = X - vxp; dy = Y - vyp
     r2 = dx**2 + dy**2 + 1e-6
     U += -Gamma / (2*np.pi) * (-dy / r2)
     V += -Gamma / (2*np.pi) * ( dx / r2)
@@ -254,31 +268,45 @@ def compute_flow_field(aero: AirfoilAero, Nx=60, Ny=40):
 
 
 def evaluate_velocity_at(aero: AirfoilAero, px, py):
-    """Analytically computes 2D velocity (u, v) at coordinates px, py."""
-    alpha = np.radians(aero.alpha)
+    """Analytically computes 2D velocity (u, v) at coordinates px, py.
+
+    The freestream is always horizontal.  Alpha rotates the airfoil body only.
+    """
     V_inf = max(aero.wind, 1.0)
     cl = aero.cl()
 
-    u = V_inf * np.cos(alpha) * np.ones_like(px)
-    v = V_inf * np.sin(alpha) * np.ones_like(py)
+    # Freestream — ALWAYS horizontal
+    u = V_inf * np.ones_like(px)
+    v = np.zeros_like(py)
 
     mu = 0.045 * (1 + 4 * aero.t)
     Gamma = 0.5 * V_inf * cl * 1.0
 
-    panels = [
+    # Rotate panel centres with the airfoil (pivot = quarter chord at x=0.25)
+    alpha_rad = np.radians(aero.alpha)
+    cos_a = np.cos(-alpha_rad); sin_a = np.sin(-alpha_rad)
+    pivot = 0.25
+    def rot_pt(xp, yp):
+        xr = pivot + (xp - pivot) * cos_a - yp * sin_a
+        yr =         (xp - pivot) * sin_a + yp * cos_a
+        return xr, yr
+
+    raw_panels = [
         (0.25, 0.00, mu * 1.2),
         (0.50, 0.00, mu * 0.9),
         (0.10, 0.00, mu * 0.7),
         (0.75, 0.00, mu * 0.5),
     ]
-    for (xp, yp, strength) in panels:
-        dx = px - xp; dy = py - yp
+    for (xp, yp, strength) in raw_panels:
+        rxp, ryp = rot_pt(xp, yp)
+        dx = px - rxp; dy = py - ryp
         r2 = dx**2 + dy**2 + 1e-6
         u += -strength * (dx**2 - dy**2) / r2**2
         v += -strength * 2 * dx * dy      / r2**2
 
-    # Vortex at quarter chord
-    dx = px - 0.25; dy = py - 0.0
+    # Vortex at rotated quarter chord
+    vxp, vyp = rot_pt(0.25, 0.0)
+    dx = px - vxp; dy = py - vyp
     r2 = dx**2 + dy**2 + 1e-6
     u += -Gamma / (2*np.pi) * (-dy / r2)
     v += -Gamma / (2*np.pi) * ( dx / r2)
@@ -562,9 +590,11 @@ class AirfoilSimApp:
         inset.set_aspect("equal"); inset.axis("off")
         inset.set_title(f"NACA {self.aero.naca}",
                         color="#94a3b8", fontsize=6.5, pad=2)
-        # Flow arrow
-        inset.annotate("", xy=(rxu[0], ryu[0]),
-                       xytext=(rxu[0]-0.25, ryu[0]),
+        # Flow arrow — always horizontal regardless of AoA
+        # Arrow tip is at the leading edge x-position but at y=0 (horizontal flow)
+        le_x = min(rxu[0], rxl[0])
+        inset.annotate("", xy=(le_x, 0.0),
+                       xytext=(le_x - 0.25, 0.0),
                        arrowprops=dict(arrowstyle="->", color="#60a5fa", lw=0.8))
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -620,58 +650,134 @@ class AirfoilSimApp:
     #  GRAPH PANEL 4 — Flow Animation
     # ─────────────────────────────────────────────────────────────────────────
 
+    def _rows_from_re(self):
+        """Return (num_rows_half, per_row) based on current Reynolds number.
+
+        Higher Re → more streaklines above AND below (equal count each side).
+        Re range 0.5 M → 10 M maps to 6 → 24 rows per side.
+        """
+        re_m = self.aero.Re / 1e6          # Re in millions
+        rows_half = int(np.clip(re_m * 2.5, 6, 24))   # per side
+        per_row   = 15
+        return rows_half, per_row
+
     def _init_animation(self):
-        """Set up particle animation loop."""
+        """Set up particle animation loop.
+
+        Particles are seeded in symmetric horizontal streaklines – equal count
+        above and below the centreline.  Number of rows scales with Re so that
+        higher Reynolds-number flows look denser.
+        """
         self.anim_running = True
-        self.num_particles = 150
-        # Initialize particles randomly across the flow field
-        self.particles_x = np.random.uniform(-0.6, 1.8, self.num_particles)
-        self.particles_y = np.random.uniform(-0.7, 0.7, self.num_particles)
-        
-        # Plot particles as scatter points
-        self.particle_dots, = self.ax_flow.plot(self.particles_x, self.particles_y, 'o', color='#60a5fa', markersize=2, alpha=0.6, zorder=4)
-        
-        # Start FuncAnimation
-        self.anim = animation.FuncAnimation(
-            self.fig, self._animate_step, interval=30, blit=True, cache_frame_data=False
-        )
+        rows_half, per_row = self._rows_from_re()
+
+        # Symmetric rows: mirror image above and below y=0
+        top_rows = np.linspace(0.65, 0.03, rows_half)    # positive y (top)
+        bot_rows = -top_rows                              # negative y (bottom)
+        # Interleave top/bottom so colours alternate nicely
+        rows_y = np.empty(rows_half * 2)
+        rows_y[0::2] = top_rows
+        rows_y[1::2] = bot_rows
+        num_rows = len(rows_y)
+
+        xs, ys, row_ids = [], [], []
+        for r_idx, ry in enumerate(rows_y):
+            for j in range(per_row):
+                xs.append(-0.6 + j * (2.4 / per_row))
+                ys.append(ry)
+                row_ids.append(r_idx)
+
+        self.particles_x   = np.array(xs,      dtype=float)
+        self.particles_y   = np.array(ys,      dtype=float)
+        self.particle_rows_y  = rows_y          # home y for every row
+        self.particle_row_ids = np.array(row_ids, dtype=int)  # per-particle row index
+        self.num_particles = len(self.particles_x)
+
+        # Colour: top rows cyan→blue, bottom rows magenta→purple
+        norm_t = np.linspace(0.0, 0.5, rows_half)
+        norm_b = np.linspace(0.5, 1.0, rows_half)
+        norm_all = np.empty(num_rows)
+        norm_all[0::2] = norm_t
+        norm_all[1::2] = norm_b
+        colours = plt.cm.cool(np.repeat(norm_all, per_row))
+
+        self.particle_dots = self.ax_flow.scatter(
+            self.particles_x, self.particles_y,
+            c=colours, s=3, alpha=0.8, zorder=4, linewidths=0)
+
+        # Start FuncAnimation (only once; subsequent Re changes just rebuild particles)
+        if not hasattr(self, 'anim') or self.anim is None:
+            self.anim = animation.FuncAnimation(
+                self.fig, self._animate_step, interval=30,
+                blit=False, cache_frame_data=False)
+
+    def _is_inside_rotated_airfoil(self, px, py):
+        """Check which particles are inside the rotated airfoil.
+
+        Transforms each particle into the airfoil-local frame (un-rotating by
+        alpha), evaluates the NACA thickness envelope, and returns a boolean
+        mask.
+        """
+        alpha_rad = np.radians(self.aero.alpha)
+        pivot = 0.25
+        # Un-rotate particle coords into airfoil frame
+        cos_a =  np.cos(alpha_rad)   # inverse rotation = positive angle
+        sin_a =  np.sin(alpha_rad)
+        dx = px - pivot
+        lx = pivot + dx * cos_a + py * sin_a   # local x
+        ly =       -dx * sin_a + py * cos_a    # local y
+
+        inside = np.zeros(len(px), dtype=bool)
+        chord_mask = (lx >= -0.01) & (lx <= 1.01)
+        if np.any(chord_mask):
+            lxc = np.clip(lx[chord_mask], 0.0, 1.0)
+            lyc = ly[chord_mask]
+            t = self.aero.t
+            m = self.aero.m
+            p = self.aero.p
+            yt = (t / 0.2) * (0.2969 * np.sqrt(np.maximum(lxc, 0))
+                              - 0.1260 * lxc
+                              - 0.3516 * lxc**2
+                              + 0.2843 * lxc**3
+                              - 0.1015 * lxc**4)
+            if p > 0:
+                yc = np.where(lxc <= p,
+                              m / p**2 * (2*p*lxc - lxc**2),
+                              m / (1-p)**2 * ((1 - 2*p) + 2*p*lxc - lxc**2))
+            else:
+                yc = np.zeros_like(lxc)
+            inside[chord_mask] = np.abs(lyc - yc) < (yt + 0.015)
+        return inside
 
     def _animate_step(self, frame):
         if not self.anim_running:
             return (self.particle_dots,)
-            
-        # Get velocity at current positions
+
+        # Get velocity at current positions (freestream is always horizontal)
         u, v = evaluate_velocity_at(self.aero, self.particles_x, self.particles_y)
-        
-        # Scale time step inversely with wind speed to keep particle movement visually consistent
+
+        # Scale time step so speed is visually consistent across wind speed range
         dt = 0.0005 * (100.0 / max(self.aero.wind, 5.0))
         self.particles_x += u * dt
         self.particles_y += v * dt
-        
-        # Re-seed particles that go out of bounds
-        out_of_bounds = (self.particles_x > 1.8) | (self.particles_x < -0.6) | (self.particles_y > 0.7) | (self.particles_y < -0.7)
-        
-        # Re-seed if they get too close/inside the airfoil
-        in_foil = np.zeros_like(self.particles_x, dtype=bool)
-        idx = (self.particles_x >= 0.0) & (self.particles_x <= 1.0)
-        if np.any(idx):
-            px = self.particles_x[idx]
-            py = self.particles_y[idx]
-            t = self.aero.t
-            m = self.aero.m
-            p = self.aero.p
-            yt = (t / 0.2) * (0.2969 * np.sqrt(px) - 0.1260 * px - 0.3516 * px**2 + 0.2843 * px**3 - 0.1015 * px**4)
-            yc = np.where(px <= p,
-                          m / (p**2 + 1e-6) * (2*p*px - px**2),
-                          m / ((1-p)**2 + 1e-6) * ((1 - 2*p) + 2*p*px - px**2))
-            in_foil[idx] = np.abs(py - yc) < (yt + 0.02)
-            
-        reset_indices = out_of_bounds | in_foil
-        if np.any(reset_indices):
-            self.particles_x[reset_indices] = -0.6
-            self.particles_y[reset_indices] = np.random.uniform(-0.7, 0.7, np.sum(reset_indices))
-            
-        self.particle_dots.set_data(self.particles_x, self.particles_y)
+
+        # Re-seed particles that leave the domain through any edge
+        out_x = self.particles_x > 1.8
+        out_bounds = out_x | (self.particles_x < -0.6) | \
+                     (self.particles_y > 0.7) | (self.particles_y < -0.7)
+
+        # Re-seed if inside the rotated airfoil body
+        in_foil = self._is_inside_rotated_airfoil(self.particles_x, self.particles_y)
+
+        reset_mask = out_bounds | in_foil
+        if np.any(reset_mask):
+            self.particles_x[reset_mask] = -0.6
+            # Restore each particle to its designated home row y-position
+            self.particles_y[reset_mask] = \
+                self.particle_rows_y[self.particle_row_ids[reset_mask]]
+
+        self.particle_dots.set_offsets(
+            np.column_stack([self.particles_x, self.particles_y]))
         return (self.particle_dots,)
 
     def _draw_flow_static(self):
@@ -754,9 +860,20 @@ class AirfoilSimApp:
         ax.text(0.5, -0.62, info, transform=ax.transData,
                 color="#64748b", fontsize=6.5, ha="center")
 
-        # Re-attach particle dots to the cleared axis
+        # Re-attach particle scatter to the cleared axis using correct symmetric colours
         if hasattr(self, 'particles_x'):
-            self.particle_dots, = ax.plot(self.particles_x, self.particles_y, 'o', color='#60a5fa', markersize=2, alpha=0.6, zorder=4)
+            rows_half = len(self.particle_rows_y) // 2
+            norm_t = np.linspace(0.0, 0.5, rows_half)
+            norm_b = np.linspace(0.5, 1.0, rows_half)
+            num_rows = rows_half * 2
+            per_row  = self.num_particles // num_rows
+            norm_all = np.empty(num_rows)
+            norm_all[0::2] = norm_t
+            norm_all[1::2] = norm_b
+            colours = plt.cm.cool(np.repeat(norm_all, per_row))
+            self.particle_dots = ax.scatter(
+                self.particles_x, self.particles_y,
+                c=colours, s=3, alpha=0.8, zorder=4, linewidths=0)
 
     # ─────────────────────────────────────────────────────────────────────────
     #  METRICS DISPLAY
@@ -790,9 +907,19 @@ class AirfoilSimApp:
     #  CALLBACKS
     # ─────────────────────────────────────────────────────────────────────────
 
+    def _reinit_particles(self):
+        """Rebuild particle streaklines (called when Re changes)."""
+        self._init_animation()
+        # Re-draw the static layer so the new scatter is on the live axis
+        self._draw_flow_static()
+
     def _on_slider(self, key, val):
         if   key == "aoa":  self.aero.alpha     = val
-        elif key == "re":   self.aero.Re        = val * 1e6
+        elif key == "re":
+            self.aero.Re = val * 1e6
+            self._update_all()
+            self._reinit_particles()   # rebuild streaklines for new Re density
+            return
         elif key == "mach": self.aero.mach      = val
         elif key == "wind": self.aero.wind      = val
         elif key == "visc": self.aero.viscosity = val * 1e-5
@@ -815,6 +942,7 @@ class AirfoilSimApp:
             self.sliders[key].set_val(val)
         self.naca_radio.set_active(self.NACA_OPTIONS.index("2412"))
         self._update_all()
+        self._reinit_particles()
 
     def run(self):
         plt.show()
