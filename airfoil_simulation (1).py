@@ -15,8 +15,168 @@ warnings.filterwarnings("ignore")
 #  NACA 4-DIGIT GEOMETRY
 # ─────────────────────────────────────────────────────────────────────────────
 
-def naca_profile(code: str, n: int = 120):
+def parse_airfoil_file(file_content: bytes, file_name: str):
+    text = file_content.decode("utf-8")
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    
+    if file_name.endswith(".csv") or "," in lines[0]:
+        xs, ys = [], []
+        start_idx = 1 if ("x" in lines[0].lower() or "y" in lines[0].lower()) else 0
+        for line in lines[start_idx:]:
+            parts = line.split(",")
+            if len(parts) >= 2:
+                try:
+                    xs.append(float(parts[0]))
+                    ys.append(float(parts[1]))
+                except ValueError:
+                    continue
+    else:
+        xs, ys = [], []
+        start_idx = 1
+        parts_first = lines[0].split()
+        if len(parts_first) >= 2:
+            try:
+                float(parts_first[0])
+                float(parts_first[1])
+                start_idx = 0
+            except ValueError:
+                pass
+        
+        for line in lines[start_idx:]:
+            parts = line.split()
+            if len(parts) >= 2:
+                try:
+                    xs.append(float(parts[0]))
+                    ys.append(float(parts[1]))
+                except ValueError:
+                    continue
+
+    if len(xs) < 10:
+        raise ValueError("Insufficient coordinates parsed.")
+
+    x = np.array(xs)
+    y = np.array(ys)
+    le_idx = np.argmin(x)
+    
+    xu = x[:le_idx+1]
+    yu = y[:le_idx+1]
+    xl = x[le_idx:]
+    yl = y[le_idx:]
+
+    if xu[0] > xu[-1]:
+        xu = xu[::-1]
+        yu = yu[::-1]
+    if xl[-1] < xl[0]:
+        xl = xl[::-1]
+        yl = yl[::-1]
+
+    min_x = min(xu[0], xl[0])
+    max_x = max(xu[-1], xl[-1])
+    chord_len = max_x - min_x
+    if chord_len > 0:
+        xu = (xu - min_x) / chord_len
+        xl = (xl - min_x) / chord_len
+        yu /= chord_len
+        yl /= chord_len
+
+    grid_x = (1 - np.cos(np.linspace(0, np.pi, 120))) / 2
+    yu_interp = np.interp(grid_x, xu, yu)
+    yl_interp = np.interp(grid_x, xl, yl)
+
+    return grid_x, yu_interp, grid_x, yl_interp
+
+
+def analyze_geometry(xu, yu, xl, yl):
+    thickness = yu - yl
+    max_t = float(np.max(thickness))
+    camber_line = 0.5 * (yu + yl)
+    max_m = float(np.max(np.abs(camber_line)))
+    
+    if max_m > 1e-4:
+        max_p_idx = np.argmax(np.abs(camber_line))
+        max_p = float(xu[max_p_idx])
+    else:
+        max_m = 0.0
+        max_p = 0.0
+
+    return max_m, max_p, max_t
+
+
+def _init_particles(Re: float, n_rows_half: int = None):
+    if n_rows_half is None:
+        re_m = Re / 1e6
+        n_rows_half = int(np.clip(re_m * 2.5, 6, 18))
+    per_row = 14
+    top_rows = np.linspace(0.62, 0.04, n_rows_half)
+    bot_rows = -top_rows
+    rows_y = np.empty(n_rows_half * 2)
+    rows_y[0::2] = top_rows
+    rows_y[1::2] = bot_rows
+    xs, ys, row_ids = [], [], []
+    for r_idx, ry in enumerate(rows_y):
+        for j in range(per_row):
+            xs.append(-0.6 + j * (2.4 / per_row))
+            ys.append(ry)
+            row_ids.append(r_idx)
+    return (np.array(xs, dtype=float),
+            np.array(ys, dtype=float),
+            rows_y,
+            np.array(row_ids, dtype=int))
+
+
+def _is_inside_airfoil(px, py, aero, custom_coords=None):
+    alpha_rad = np.radians(aero.alpha)
+    pivot = 0.25
+    cos_a = np.cos(alpha_rad); sin_a = np.sin(alpha_rad)
+    dx = px - pivot
+    lx = pivot + dx*cos_a + py*sin_a
+    ly =        -dx*sin_a + py*cos_a
+    inside = np.zeros(len(px), dtype=bool)
+    chord_mask = (lx >= -0.01) & (lx <= 1.01)
+    
+    if np.any(chord_mask):
+        lxc = np.clip(lx[chord_mask], 0.0, 1.0)
+        lyc = ly[chord_mask]
+        
+        if custom_coords is not None:
+            cxu, cyu, _, cyl = custom_coords
+            bound_upper = np.interp(lxc, cxu, cyu)
+            bound_lower = np.interp(lxc, cxu, cyl)
+            inside[chord_mask] = (lyc > bound_lower - 0.005) & (lyc < bound_upper + 0.005)
+        else:
+            t = aero.t; m = aero.m; p = aero.p
+            yt = (t/0.2)*(0.2969*np.sqrt(np.maximum(lxc,0))-0.1260*lxc
+                          -0.3516*lxc**2+0.2843*lxc**3-0.1015*lxc**4)
+            if p > 0:
+                yc = np.where(lxc <= p,
+                              m/p**2*(2*p*lxc-lxc**2),
+                              m/(1-p)**2*((1-2*p)+2*p*lxc-lxc**2))
+            else:
+                yc = np.zeros_like(lxc)
+            inside[chord_mask] = np.abs(lyc - yc) < (yt + 0.015)
+            
+    return inside
+
+
+def _step_particles(aero, px, py, rows_y, row_ids, custom_coords=None):
+    u, v = evaluate_velocity_at(aero, px, py)
+    dt = 0.0005 * (100.0 / max(aero.wind, 5.0))
+    px = px + u * dt
+    py = py + v * dt
+    out_bounds = (px > 1.8) | (px < -0.6) | (py > 0.7) | (py < -0.7)
+    in_foil    = _is_inside_airfoil(px, py, aero, custom_coords)
+    reset = out_bounds | in_foil
+    if np.any(reset):
+        px[reset] = -0.6
+        py[reset] = rows_y[row_ids[reset]]
+    return px, py
+
+
+def naca_profile(code: str, n: int = 120, custom_coords=None):
     """Return upper/lower surface (x,y) coords for a NACA 4-digit airfoil."""
+    if custom_coords is not None:
+        return custom_coords
+
     code = str(code).zfill(4)
     m = int(code[0]) / 100.0   # max camber
     p = int(code[1]) / 10.0    # max camber position
@@ -85,19 +245,24 @@ class AirfoilAero:
     """
 
     def __init__(self, naca="2412", alpha=5.0, Re=3e6,
-                 mach=0.15, wind=50.0, viscosity=1.81e-5):
+                 mach=0.15, wind=50.0, viscosity=1.81e-5, custom_geom=None, rho=1.225):
         self.naca = str(naca).zfill(4)
         self.alpha = alpha
         self.Re = Re
         self.mach = mach
         self.wind = wind
         self.viscosity = viscosity
+        self.custom_geom = custom_geom
+        self.rho = rho
         self._parse_naca()
 
     def _parse_naca(self):
-        self.m = int(self.naca[0]) / 100.0
-        self.p = int(self.naca[1]) / 10.0
-        self.t = int(self.naca[2:]) / 100.0
+        if self.custom_geom is not None:
+            self.m, self.p, self.t = self.custom_geom
+        else:
+            self.m = int(self.naca[0]) / 100.0
+            self.p = int(self.naca[1]) / 10.0
+            self.t = int(self.naca[2:]) / 100.0
 
     # ── Prandtl-Glauert compressibility factor ───────────────────────────────
     @property
@@ -187,8 +352,7 @@ class AirfoilAero:
     # ── Dynamic pressure ─────────────────────────────────────────────────────
     @property
     def q_inf(self):
-        rho = 1.225  # kg/m³ ISA sea level
-        return 0.5 * rho * self.wind**2
+        return 0.5 * self.rho * self.wind**2
 
     # ── L/D ratio ────────────────────────────────────────────────────────────
     def ld_ratio(self, alpha=None):

@@ -56,7 +56,7 @@ class Aerodynamics:
     """
     DYNAMIC_VISCOSITY = 1.81e-5  # Dynamic viscosity of air (mu) in Pa*s
 
-    def __init__(self, aircraft: Aircraft, rho: float, velocity: float):
+    def __init__(self, aircraft: Aircraft, rho: float, velocity: float, viscosity: float = 1.81e-5):
         """
         Initializes the Aerodynamic State Solver.
 
@@ -64,10 +64,12 @@ class Aerodynamics:
             aircraft (Aircraft): Physical aircraft geometry.
             rho (float): Ambient air density (rho) in kg/m^3.
             velocity (float): True Airspeed (V) in m/s.
+            viscosity (float): Dynamic viscosity (mu) in Pa*s.
         """
         self.aircraft = aircraft
         self.rho = float(rho)
         self.velocity = float(velocity)
+        self.viscosity = float(viscosity)
         
         # Flight state variables (resolved dynamically in solver)
         self.cl_2d = 0.0
@@ -117,9 +119,9 @@ class Aerodynamics:
         Formula: Re = (rho * V * c) / mu
         """
         c = self.aircraft.mean_chord
-        if self.DYNAMIC_VISCOSITY == 0:
+        if self.viscosity == 0:
             return 1e6
-        return (self.rho * self.velocity * c) / self.DYNAMIC_VISCOSITY
+        return (self.rho * self.velocity * c) / self.viscosity
 
     @property
     def dynamic_pressure(self) -> float:
