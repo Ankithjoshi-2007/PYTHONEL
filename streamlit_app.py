@@ -317,12 +317,13 @@ def rotate_airfoil(xu, yu, xl, yl, alpha_deg):
 
 
 class AirfoilAero:
-    def __init__(self, naca="2412", alpha=5.0, Re=3e6, mach=0.15, wind=50.0, custom_geom=None):
+    def __init__(self, naca="2412", alpha=5.0, Re=3e6, mach=0.15, wind=50.0, custom_geom=None, rho=1.225):
         self.naca = str(naca).zfill(4)
         self.alpha = alpha
         self.Re    = Re
         self.mach  = mach
         self.wind  = wind
+        self.rho   = rho   # actual fluid density for q_inf etc.
         self.custom_geom = custom_geom
         self._parse_naca()
 
@@ -396,7 +397,7 @@ class AirfoilAero:
 
     @property
     def q_inf(self):
-        return 0.5 * 1.225 * self.wind**2
+        return 0.5 * self.rho * self.wind**2
 
     def ld_ratio(self):
         c = self.cd()
@@ -975,24 +976,29 @@ def render_sidebar():
                               ["Normal Flight (Air)", "Water", "Engine Oil (SAE 30)", "Custom Fluid"],
                               index=0)
 
+        # (rho, mu, speed_of_sound)
         presets = {
             "Normal Flight (Air)": (1.225, 1.81e-5, 340.0),
             "Water": (998.0, 1.002e-3, 1482.0),
             "Engine Oil (SAE 30)": (890.0, 0.29, 1740.0),
-            "Custom Fluid": (1.0, 1e-5, 300.0)
+            "Custom Fluid": (1.225, 1e-5, 340.0)  # rho fixed to air default
         }
 
         default_rho, default_mu, default_a = presets[medium]
 
         if medium == "Custom Fluid":
-            rho = st.number_input("Density ρ (kg/m³)", min_value=0.01, max_value=20000.0, value=1.0, step=0.1)
-            visc = st.number_input("Dynamic Viscosity μ (Pa·s)", min_value=1e-7, max_value=10.0, value=1e-5, format="%.2e")
-            speed_of_sound = st.number_input("Speed of Sound (m/s)", min_value=1.0, max_value=10000.0, value=300.0, step=10.0)
+            # Only viscosity is user-adjustable; density comes from the air default
+            rho = default_rho  # fixed — not exposed as an input
+            visc = st.number_input("Dynamic Viscosity μ (Pa·s)", min_value=1e-7, max_value=10.0,
+                                   value=float(default_mu), format="%.2e",
+                                   help="Re = ρ × V × L / μ  (ρ and L fixed)")
+            speed_of_sound = st.number_input("Speed of Sound (m/s)", min_value=1.0, max_value=10000.0,
+                                             value=float(default_a), step=10.0)
+            st.caption(f"ρ = {rho} kg/m³  (fixed — density not editable)")
         else:
             rho = default_rho
             visc = default_mu
             speed_of_sound = default_a
-            st.text(f"Density ρ: {rho} kg/m³")
             st.text(f"Viscosity μ: {visc:.2e} Pa·s")
             st.text(f"Speed of Sound: {speed_of_sound} m/s")
 
@@ -1009,14 +1015,16 @@ def render_sidebar():
                           float(default_vel), float(vel_step),
                           help="Free-stream flow speed relative to airfoil")
 
-        chord = 1.0
+        chord = 1.0  # characteristic length L = 1 m (normalised chord)
+        # Re = ρ × V × L / μ
         Re = (rho * wind * chord) / visc
         mach = wind / speed_of_sound
 
         st.markdown('<div class="section-header">Derived Metrics</div>', unsafe_allow_html=True)
         st.markdown(f"""
         <div style="font-size:0.8rem; color:#94a3b8; line-height:1.6;">
-          🧪 Reynolds Number: <b>{Re:.2e}</b><br>
+          🧪 Reynolds Number: <b>{Re:.2e}</b>
+          <span style="font-size:0.7rem; color:#475569;"> (Re = ρ·V·L / μ)</span><br>
           ⚡ Mach Number: <b>{mach:.3f}</b>
         </div>
         """, unsafe_allow_html=True)
@@ -1034,7 +1042,7 @@ def render_sidebar():
         </div>
         """, unsafe_allow_html=True)
 
-    return naca, alpha, Re, mach, wind, custom_coords, custom_geom
+    return naca, alpha, Re, mach, wind, custom_coords, custom_geom, rho
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1096,14 +1104,16 @@ def page_dashboard(aero: AirfoilAero, custom_coords=None):
     cl  = aero.cl(); cd  = aero.cd()
     ld  = cl / max(cd, 1e-9); q = aero.q_inf
     M   = aero.mach
+    Re  = aero.Re
 
-    cols = st.columns(5)
+    cols = st.columns(6)
     cards = [
-        ("CL Lift Coeff.", f"{cl:+.4f}", f"Stall at {aero.stall_angle:.1f}°", "#34d399"),
-        ("CD Drag Coeff.", f"{cd:.5f}",  "Total 2D drag",                      "#f59e0b"),
-        ("L/D Efficiency", f"{ld:.2f}",  "Higher = more efficient",            "#60a5fa"),
-        ("q∞ Dyn. Press.", f"{q:.1f} Pa","0.5 ρ V²",                           "#c084fc"),
-        ("Ma Mach",        f"{M:.3f}",   "Compressibility" if M>0.3 else "Subsonic", "#f472b6"),
+        ("CL Lift Coeff.",  f"{cl:+.4f}",   f"Stall at {aero.stall_angle:.1f}°",  "#34d399"),
+        ("CD Drag Coeff.",  f"{cd:.5f}",     "Total 2D drag",                       "#f59e0b"),
+        ("L/D Efficiency",  f"{ld:.2f}",     "Higher = more efficient",             "#60a5fa"),
+        ("Re Reynolds No.", f"{Re:.3e}",     "Re = ρ · V · L / μ",                 "#38bdf8"),
+        ("q∞ Dyn. Press.",  f"{q:.1f} Pa",  "0.5 ρ V²",                            "#c084fc"),
+        ("Ma Mach",         f"{M:.3f}",      "Compressibility" if M>0.3 else "Subsonic", "#f472b6"),
     ]
     for col, (lbl, val, sub, clr) in zip(cols, cards):
         with col:
@@ -1219,7 +1229,8 @@ def page_flow_animation(aero: AirfoilAero, custom_coords=None):
         Re=(aero.Re / aero.wind) * local_wind,   # scale Re linearly with V
         mach=local_wind / (aero.wind / aero.mach) if aero.mach > 0 else 0.0,
         wind=local_wind,
-        custom_geom=aero.custom_geom
+        custom_geom=aero.custom_geom,
+        rho=aero.rho   # carry fluid density through so q_inf stays correct
     )
 
     cl = local_aero.cl(); cd = local_aero.cd()
@@ -1240,7 +1251,8 @@ def page_flow_animation(aero: AirfoilAero, custom_coords=None):
         unsafe_allow_html=True)
 
     cache_key = (local_aero.naca, round(local_aero.alpha, 1),
-                 round(local_mach, 3), int(local_wind * 10), frame_duration)
+                 round(local_mach, 3), int(local_wind * 10), frame_duration,
+                 round(local_re, 0))   # include Re so viscosity changes bust cache
     if st.session_state.get("anim_cache_key") != cache_key:
         with st.spinner("Computing animation frames…"):
             fig = build_animated_flow_chart(
@@ -1277,8 +1289,8 @@ def page_flow_animation(aero: AirfoilAero, custom_coords=None):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def main():
-    naca, alpha, Re, mach, wind, custom_coords, custom_geom = render_sidebar()
-    aero = AirfoilAero(naca=naca, alpha=alpha, Re=Re, mach=mach, wind=wind, custom_geom=custom_geom)
+    naca, alpha, Re, mach, wind, custom_coords, custom_geom, rho = render_sidebar()
+    aero = AirfoilAero(naca=naca, alpha=alpha, Re=Re, mach=mach, wind=wind, custom_geom=custom_geom, rho=rho)
 
     tab1, tab2 = st.tabs(["📊  Dashboard", "🌊  Flow Field Animation"])
 
